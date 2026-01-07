@@ -6,9 +6,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-# ТВОИ ДАННЫЕ (токен замени на НОВЫЙ!)
-BOT_TOKEN = "8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo"  # ← НОВЫЙ ТОКЕН СЮДА
-ADMIN_CHAT_ID = -1003267199569  # ← ТВОЙ ID исправлен
+# НАСТРОЙКИ
+BOT_TOKEN = "8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo"  # ← ЗАМЕНИ НА НОВЫЙ!
+ADMIN_CHAT_ID = -1003267199569
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
@@ -64,10 +64,8 @@ async def ask_question(message: Message):
     target_id = targets.pop(user.id)
     text = message.text
     
-    # Сохраняем вопрос
     questions_storage[message.message_id] = {"from_id": user.id, "to_id": target_id}
     
-    # Получателю
     await bot.send_message(
         target_id,
         f"🗨️ Анонимный вопрос:
@@ -76,10 +74,8 @@ async def ask_question(message: Message):
         reply_markup=make_answer_keyboard(message.message_id)
     )
     
-    # Спрашивающему
     await message.answer("✅ Отправлено!")
     
-    # Админу
     await bot.send_message(
         ADMIN_CHAT_ID,
         f"❗️ Вопрос
