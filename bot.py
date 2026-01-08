@@ -24,11 +24,16 @@ def short_uuid():
     token = secrets.token_bytes(4)
     return base64.urlsafe_b64encode(token).rstrip(b'=').decode()[:8]
 
+def encode_callback(q_id):
+    """Кодируем ID для кнопки (без спецсимволов)"""
+    return base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
+
+def decode_callback(cb_data):
+    """Декодируем обратно"""
+    return base64.urlsafe_b64decode(cb_data.encode()).decode()[:8]
+
 def user_mention(user_id, username, first_name):
-    """Кликабельная ссылка на юзера 👆"""
-    if username:
-        return f'<a href="tg://user?id={user_id}">@{username}</a>'
-    return f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
+    return f'<a href="tg://user?id={user_id}">@{username}</a>' if username else f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -96,21 +101,20 @@ def process_question(message):
         conn.commit()
         pending_questions[q_id] = user_id
         
+        # КНОПКА с base64 ID
+        cb_data = encode_callback(q_id)
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{q_id}"))
+        markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{cb_data}"))
         bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b>
 
 ❓ <i>#{q_id}</i>
 
 💭 <b>{message.text}</b>''', reply_markup=markup, parse_mode='HTML')
         
-        # АДМИН ЛОГ с КЛИКАБЕЛЬНЫМИ ЮЗЕРАМИ 👇
         sender_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
-        owner_mention = user_mention(owner_id, None, "Владелец")  # owner_id из БД
         admin_log = f'''🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
 
-{sender_mention} ({user_id})
-→ {owner_mention} ({owner_id})
+{sender_mention} ({user_id}) → {owner_id}
 
 💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
@@ -137,7 +141,8 @@ def choice_handler(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
 def reply_menu(call):
-    q_id = call.data.split('_')[1]
+    cb_data = call.data[6:]  # Убираем "reply_"
+    q_id = decode_callback(cb_data)
     bot.answer_callback_query(call.id)
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
     reply_pending[call.from_user.id] = q_id
@@ -165,12 +170,10 @@ def process_reply(message, q_id):
 
 ✨ Получатель увидит свой вопрос + ответ''', parse_mode='HTML')
         
-        # АДМИН ЛОГ ОТВЕТА с юзерами
         sender_mention = user_mention(sender_id, None, "Отправитель")
-        owner_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
         reply_log = f'''📤 <b>ОТВЕТ #{q_id}</b>
 
-{owner_mention} ({user_id})
+{user_mention(user_id, message.from_user.username, message.from_user.first_name)} ({user_id})
 → {sender_mention} ({sender_id})
 
 ❓ <i>{question_text}</i>
@@ -179,6 +182,5 @@ def process_reply(message, q_id):
     else:
         bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
 
-print("🚀 ✨ Бот с кликабельными юзерами готов!")
+print("🚀 ✨ Бот с исправленными кнопками!")
 bot.polling(none_stop=True)
-
