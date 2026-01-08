@@ -39,7 +39,7 @@ def start(message):
     bot_username = bot.get_me().username
     share_url = f"https://t.me/{bot_username}?start={link_id}"
     
-    clickable = f"🔗 [👤 Твоя секретная ссылка]({share_url})"
+    clickable = f"🔗👤 [Твоя секретная ссылка]({share_url})"
     bot.reply_to(message, f"""🎭 <b>Анонимные вопросы!</b>
 
 {clickable}
