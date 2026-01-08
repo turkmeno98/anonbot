@@ -24,6 +24,12 @@ def short_uuid():
     token = secrets.token_bytes(4)
     return base64.urlsafe_b64encode(token).rstrip(b'=').decode()[:8]
 
+def user_mention(user_id, username, first_name):
+    """Кликабельная ссылка на юзера 👆"""
+    if username:
+        return f'<a href="tg://user?id={user_id}">@{username}</a>'
+    return f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
+
 @bot.message_handler(commands=['start'])
 def start(message):
     parts = message.text.split()
@@ -39,7 +45,6 @@ def start(message):
     bot_username = bot.get_me().username
     share_url = f"https://t.me/{bot_username}?start={link_id}"
     
-    # HTML ссылка (работает!)
     clickable = f'<a href="{share_url}">🔗 Твоя секретная ссылка</a>'
     bot.reply_to(message, f'''🎭 <b>Анонимные вопросы!</b>
 
@@ -99,13 +104,13 @@ def process_question(message):
 
 💭 <b>{message.text}</b>''', reply_markup=markup, parse_mode='HTML')
         
-        sender_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
-        sender_username = message.from_user.username or '🦸 Аноним'
+        # АДМИН ЛОГ с КЛИКАБЕЛЬНЫМИ ЮЗЕРАМИ 👇
+        sender_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
+        owner_mention = user_mention(owner_id, None, "Владелец")  # owner_id из БД
         admin_log = f'''🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
 
-👤 <code>@{sender_username}</code> ({user_id})
-📛 {sender_name}
-👥 → <code>{owner_id}</code>
+{sender_mention} ({user_id})
+→ {owner_mention} ({owner_id})
 
 💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
@@ -156,17 +161,24 @@ def process_reply(message, q_id):
 
 💬 <b>{message.text}</b>'''
         bot.send_message(sender_id, full_reply, parse_mode='HTML')
-        bot.reply_to(message, f'''✅ <b>Успешно!</b>
+        bot.reply_to(message, f'''✅ <b>Ответ доставлен!</b>
 
-✨ Получатель уже увидел твой ответ''', parse_mode='HTML')
+✨ Получатель увидит свой вопрос + ответ''', parse_mode='HTML')
         
+        # АДМИН ЛОГ ОТВЕТА с юзерами
+        sender_mention = user_mention(sender_id, None, "Отправитель")
+        owner_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
         reply_log = f'''📤 <b>ОТВЕТ #{q_id}</b>
-{user_id} → {sender_id}
+
+{owner_mention} ({user_id})
+→ {sender_mention} ({sender_id})
+
 ❓ <i>{question_text}</i>
 💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, reply_log, parse_mode='HTML')
     else:
         bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
 
-print("🚀 ✨ Красивый бот с HTML ссылками!")
+print("🚀 ✨ Бот с кликабельными юзерами готов!")
 bot.polling(none_stop=True)
+
