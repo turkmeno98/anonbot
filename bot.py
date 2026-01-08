@@ -9,7 +9,8 @@ TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'
 ADMIN_CHAT_ID = -1003267199569
 
 bot = telebot.TeleBot(TOKEN)
-user_states = {}
+user_states = defaultdict(lambda: None)  # user_id -> state_data
+reply_pending = {}  # user_id -> q_id (для ответов)
 
 conn = sqlite3.connect('anon_bot.db', check_same_thread=False)
 cursor = conn.cursor()
@@ -53,7 +54,27 @@ def handle_deep_link(message):
     else:
         bot.reply_to(message, "❌ Неверная ссылка.")
 
-@bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id][0] == 'waiting_question')
+# ГЛОБАЛЬНЫЙ ХЕНДЛЕР для состояний
+@bot.message_handler(func=lambda m: True)
+def global_handler(message):
+    user_id = message.from_user.id
+    state = user_states[user_id]
+    
+    # Ожидание вопроса
+    if state and state[0] == 'waiting_question':
+        process_question(message)
+        return
+    
+    # Ожидание выбора
+    if state and state[0] == 'waiting_choice':
+        choice_handler(message)
+        return
+    
+    # Ожидание ответа (reply_pending)
+    if user_id in reply_pending:
+        process_reply(message, reply_pending[user_id])
+        return
+
 def process_question(message):
     user_id = message.from_user.id
     link = user_states[user_id][1]
@@ -72,7 +93,6 @@ def process_question(message):
         markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{q_id}"))
         bot.send_message(owner_id, f"❓ #{q_id}\n<b>{message.text}</b>", reply_markup=markup, parse_mode='HTML')
         
-        # Админ лог
         sender_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
         sender_username = message.from_user.username or 'no_username'
         admin_log = f"""🕵️ #{q_id}
@@ -83,51 +103,49 @@ def process_question(message):
         
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add("➕ Ещё вопрос", "🔄 Новая ссылка")
-        bot.reply_to(message, "✅ Отправлено!\nЧто дальше?", reply_markup=markup)
+        bot.reply_to(message, "✅ Отправлено!\n➕ Ещё / 🔄 Новая?", reply_markup=markup)
         user_states[user_id] = ('waiting_choice', link)
     else:
         bot.reply_to(message, "❌ Ошибка.")
 
-@bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id][0] == 'waiting_choice')
 def choice_handler(message):
     user_id = message.from_user.id
     
-    if "Ещё вопрос" in message.text:
-        del user_states[user_id]
-        bot.reply_to(message, "💬 Напишите следующий вопрос анонимно:")
+    if "Ещё" in message.text:
         user_states[user_id] = ('waiting_question', user_states[user_id][1])
-    elif "Новая ссылка" in message.text:
-        bot.reply_to(message, "🔄 Получите новую /start")
+        bot.reply_to(message, "💬 Следующий вопрос анонимно:")
+    else:
         user_states[user_id] = None
+        bot.reply_to(message, "🔄 Получите новую /start")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
 def reply_menu(call):
     q_id = call.data.split('_')[1]
     bot.answer_callback_query(call.id)
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
-    msg = bot.reply_to(call.message, f"💬 Ответ на #{q_id}:")
-    bot.register_next_step_handler(msg, process_reply, q_id)
+    reply_pending[call.from_user.id] = q_id
+    bot.reply_to(call.message, f"💬 Ответ на #{q_id}:")
 
 def process_reply(message, q_id):
+    user_id = message.from_user.id
     sender_id = pending_questions.pop(q_id, None)
+    del reply_pending[user_id]
+    
     if sender_id:
-        # ЦИТАТА ВОПРОСА + ОТВЕТ
         cursor.execute("SELECT question_text FROM questions WHERE q_id=?", (q_id,))
         result = cursor.fetchone()
         question_text = result[0] if result else "Вопрос удалён"
         
-        full_reply = f"📩 Ответ на ваш вопрос:\n<i>{question_text}</i>\n\n<b>{message.text}</b>"
+        full_reply = f"📩 Ответ на вопрос:\n<i>{question_text}</i>\n\n<b>{message.text}</b>"
         bot.send_message(sender_id, full_reply, parse_mode='HTML')
-        bot.reply_to(message, "✅ Ответ отправлен с цитатой!")
+        bot.reply_to(message, "✅ Отправлено с цитатой!")
         
-        # Админ лог
         reply_log = f"""📤 #{q_id}
-От {message.from_user.id} → {sender_id}
+{message.from_user.id} → {sender_id}
 ❓ {question_text}
 💬 <b>{message.text}</b>"""
         bot.send_message(ADMIN_CHAT_ID, reply_log, parse_mode='HTML')
-    else:
-        bot.reply_to(message, "❌ Вопрос не найден.")
 
-print("🚀 Бот с цитатами вопросов готов!")
+print("🚀 Бот без багов готов!")
 bot.polling(none_stop=True)
+
