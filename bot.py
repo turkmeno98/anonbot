@@ -5,7 +5,7 @@ import secrets
 import sqlite3
 from collections import defaultdict
 
-TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'  # Токен ✨
+TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'  # Токен!
 ADMIN_CHAT_ID = -1003267199569
 
 bot = telebot.TeleBot(TOKEN)
@@ -33,7 +33,6 @@ def start(message):
         handle_deep_link(message)
         return
     
-    🎉 НОВАЯ ССЫЛКА!
     link_id = short_uuid()
     cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (link_id, user_id))
     conn.commit()
@@ -65,11 +64,11 @@ def global_handler(message):
     user_id = message.from_user.id
     state = user_states[user_id]
     
-    if state == ('waiting_question', user_states[user_id][1]):
+    if state and state[0] == 'waiting_question':
         process_question(message)
         return
     
-    if state == ('waiting_choice', user_states[user_id][1]):
+    if state and state[0] == 'waiting_choice':
         choice_handler(message)
         return
     
@@ -91,7 +90,6 @@ def process_question(message):
         conn.commit()
         pending_questions[q_id] = user_id
         
-        # Красивое уведомление владельцу 🌟
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{q_id}"))
         bot.send_message(owner_id, f"""🎁 <b>Новый анонимный вопрос!</b>
@@ -100,7 +98,6 @@ def process_question(message):
 
 💭 <b>{message.text}</b>""", reply_markup=markup, parse_mode='HTML')
         
-        # Админ лог ✨
         sender_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
         sender_username = message.from_user.username or '🦸 Аноним'
         admin_log = f"""🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
@@ -141,7 +138,6 @@ def reply_menu(call):
     bot.reply_to(call.message, f"""✍️ <b>Ответ на вопрос #{q_id}</b>
 
 💬 Твой ответ:""")
-    
 
 def process_reply(message, q_id):
     user_id = message.from_user.id
@@ -153,7 +149,6 @@ def process_reply(message, q_id):
         result = cursor.fetchone()
         question_text = result[0] if result else "?"
         
-        # ОТВЕТ С ЦИТАТОЙ 🌟
         full_reply = f"""📩 <b>Ответ получен!</b>
 
 ❓ <i>{question_text}</i>
@@ -164,7 +159,6 @@ def process_reply(message, q_id):
 
 ✨ Получатель увидит свой вопрос + ответ""", parse_mode='HTML')
         
-        # Админ лог
         reply_log = f"""📤 <b>ОТВЕТ #{q_id}</b>
 {user_id} → {sender_id}
 ❓ <i>{question_text}</i>
@@ -173,6 +167,5 @@ def process_reply(message, q_id):
     else:
         bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
 
-print("🚀 ✨ Красивый анонимный бот запущен!")
+print("🚀 ✨ Красивый бот запущен!")
 bot.polling(none_stop=True)
-
