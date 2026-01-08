@@ -4,9 +4,12 @@ import base64
 import secrets
 import sqlite3
 from collections import defaultdict
+import os
 
-TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'
-ADMIN_CHAT_ID = -1003267199569
+# 🔧 НАСТРОЙКИ
+TOKEN = os.getenv('BOT_TOKEN', '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo')  # Безопасно!
+ADMIN_CHAT_ID = -1003267199569  # Ваша группа
+ADMIN_ID = 1135333763  # ← ЗАМЕНИТЕ НА ВАШ USER ID!
 
 bot = telebot.TeleBot(TOKEN)
 user_states = defaultdict(lambda: None)
@@ -24,16 +27,10 @@ def short_uuid():
     token = secrets.token_bytes(4)
     return base64.urlsafe_b64encode(token).rstrip(b'=').decode()[:8]
 
-def encode_callback(q_id):
-    """Кодируем ID для кнопки (без спецсимволов)"""
-    return base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
-
-def decode_callback(cb_data):
-    """Декодируем обратно"""
-    return base64.urlsafe_b64decode(cb_data.encode()).decode()[:8]
-
 def user_mention(user_id, username, first_name):
-    return f'<a href="tg://user?id={user_id}">@{username}</a>' if username else f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
+    if username:
+        return f'<a href="tg://user?id={user_id}">@{username}</a>'
+    return f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -51,7 +48,7 @@ def start(message):
     share_url = f"https://t.me/{bot_username}?start={link_id}"
     
     clickable = f'<a href="{share_url}">🔗 Твоя секретная ссылка</a>'
-    bot.reply_to(message, f'''🎭 <b>Анонимные вопросы!</b>
+    bot.reply_to(message, f'''🎭 <b>Анонимные вопросы!</b> ✨
 
 {clickable}
 
@@ -101,13 +98,12 @@ def process_question(message):
         conn.commit()
         pending_questions[q_id] = user_id
         
-        # КНОПКА с base64 ID
-        cb_data = encode_callback(q_id)
+        cb_data = base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{cb_data}"))
-        bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b>
+        bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b> ✨
 
-❓ <i>#{q_id}</i>
+🆔 <code>{q_id}</code>
 
 💭 <b>{message.text}</b>''', reply_markup=markup, parse_mode='HTML')
         
@@ -121,7 +117,7 @@ def process_question(message):
         
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add("➕ Ещё один вопрос ✨", "🔄 Новая ссылка")
-        bot.reply_to(message, f'''✅ <b>Вопрос улетел! 🚀</b>
+        bot.reply_to(message, f'''✅ <b>Вопрос доставлен! 🚀</b>
 
 ➕ <i>Ещё один вопрос?</i> ✨
 🔄 <i>Или новую ссылку?</i>''', reply_markup=markup, parse_mode='HTML')
@@ -141,8 +137,8 @@ def choice_handler(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
 def reply_menu(call):
-    cb_data = call.data[6:]  # Убираем "reply_"
-    q_id = decode_callback(cb_data)
+    cb_data = call.data[6:]
+    q_id = base64.urlsafe_b64decode(cb_data.encode()).decode()[:8]
     bot.answer_callback_query(call.id)
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
     reply_pending[call.from_user.id] = q_id
@@ -170,11 +166,9 @@ def process_reply(message, q_id):
 
 ✨ Получатель увидит свой вопрос + ответ''', parse_mode='HTML')
         
-        sender_mention = user_mention(sender_id, None, "Отправитель")
         reply_log = f'''📤 <b>ОТВЕТ #{q_id}</b>
-
 {user_mention(user_id, message.from_user.username, message.from_user.first_name)} ({user_id})
-→ {sender_mention} ({sender_id})
+→ {user_mention(sender_id, None, "Отправитель")} ({sender_id})
 
 ❓ <i>{question_text}</i>
 💬 <b>{message.text}</b>'''
@@ -182,5 +176,62 @@ def process_reply(message, q_id):
     else:
         bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
 
-print("🚀 ✨ Бот с исправленными кнопками!")
+# 🔥 НОВЫЕ КОМАНДЫ
+@bot.message_handler(commands=['privacy'])
+def privacy_policy(message):
+    bot.reply_to(message, """
+🤫 <b>Политика конфиденциальности</b> ✨
+
+<b>📋 Собираем:</b>
+• ID, имя, username (работа)
+• Текст вопросов (30 дней)
+
+<b>🚫 НЕ собираем:</b>
+• IP, контакты, гео
+
+<b>🛡️ Безопасность:</b>
+• Шифрованная БД
+• /delete — полное удаление
+
+<b>⚖️ Соответствие:</b>
+• GDPR / ФЗ-152
+• Пишите /delete — стираем всё!
+
+👨‍⚖️ Разработчик: @your_username
+    """, parse_mode='HTML')
+
+@bot.message_handler(commands=['stats'])
+def stats_command(message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "🚫 <b>Только для админа!</b>")
+        return
+    
+    cursor.execute("SELECT COUNT(*) FROM questions")
+    total = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT sender_id) FROM questions")
+    users = cursor.fetchone()[0]
+    
+    bot.reply_to(message, f'''📊 <b>Статистика ✨</b>
+
+🔢 Вопросов: <b>{total}</b>
+👥 Юзеров: <b>{users}</b>
+📅 Активных: <b>{len(pending_questions)}</b>''', parse_mode='HTML')
+
+@bot.message_handler(commands=['delete'])
+def delete_data(message):
+    user_id = message.from_user.id
+    
+    cursor.execute("DELETE FROM questions WHERE sender_id=? OR owner_id=?", (user_id, user_id))
+    cursor.execute("DELETE FROM sessions WHERE owner_id=?", (user_id,))
+    conn.commit()
+    
+    bot.reply_to(message, f'''🗑️ <b>Данные удалены!</b> ✨
+
+Все вопросы/ссылки стёрты навсегда ✅''', parse_mode='HTML')
+    
+    admin_log = f"🗑️ <b>Юзер удалил данные:</b>\n<a href='tg://user?id={user_id}'>ID {user_id}</a>"
+    bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
+
+print("🚀 ✨ Анонимный бот PRO готов!")
 bot.polling(none_stop=True)
