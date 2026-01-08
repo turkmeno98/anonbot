@@ -162,9 +162,9 @@ def process_reply(message, q_id):
 
 💬 <b>{message.text}</b>'''
         bot.send_message(sender_id, full_reply, parse_mode='HTML')
-        bot.reply_to(message, f'''✅ <b>Ответ доставлен!</b>
+        bot.reply_to(message, f'''✅ <b>Успешно!</b>
 
-✨ Получатель увидит свой вопрос + ответ''', parse_mode='HTML')
+✨ Пользователь получил твой ответ''', parse_mode='HTML')
         
         reply_log = f'''📤 <b>ОТВЕТ #{q_id}</b>
 {user_mention(user_id, message.from_user.username, message.from_user.first_name)} ({user_id})
