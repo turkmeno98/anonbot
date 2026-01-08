@@ -5,7 +5,7 @@ import secrets
 import sqlite3
 from collections import defaultdict
 
-TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'  # Токен!
+TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'
 ADMIN_CHAT_ID = -1003267199569
 
 bot = telebot.TeleBot(TOKEN)
@@ -39,13 +39,14 @@ def start(message):
     bot_username = bot.get_me().username
     share_url = f"https://t.me/{bot_username}?start={link_id}"
     
-    clickable = f"🔗👤 [Твоя секретная ссылка]({share_url})"
-    bot.reply_to(message, f"""🎭 <b>Анонимные вопросы!</b>
+    # HTML ссылка (работает!)
+    clickable = f'<a href="{share_url}">🔗 Твоя секретная ссылка</a>'
+    bot.reply_to(message, f'''🎭 <b>Анонимные вопросы!</b>
 
 {clickable}
 
 ✨ Поделись — получишь интересные сообщения от друзей!
-<i>Они не увидят, кто они для тебя 😎</i>""", parse_mode='HTML')
+<i>Они не увидят, кто они для тебя 😎</i>''', parse_mode='HTML')
 
 def handle_deep_link(message):
     user_id = message.from_user.id
@@ -92,29 +93,29 @@ def process_question(message):
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{q_id}"))
-        bot.send_message(owner_id, f"""🎁 <b>Новый анонимный вопрос!</b>
+        bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b>
 
 ❓ <i>#{q_id}</i>
 
-💭 <b>{message.text}</b>""", reply_markup=markup, parse_mode='HTML')
+💭 <b>{message.text}</b>''', reply_markup=markup, parse_mode='HTML')
         
         sender_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
         sender_username = message.from_user.username or '🦸 Аноним'
-        admin_log = f"""🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
+        admin_log = f'''🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
 
 👤 <code>@{sender_username}</code> ({user_id})
 📛 {sender_name}
 👥 → <code>{owner_id}</code>
 
-💬 <b>{message.text}</b>"""
+💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
         
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add("➕ Ещё один вопрос ✨", "🔄 Новая ссылка")
-        bot.reply_to(message, f"""✅ <b>Вопрос улетел! 🚀</b>
+        bot.reply_to(message, f'''✅ <b>Вопрос улетел! 🚀</b>
 
 ➕ <i>Ещё один вопрос?</i> ✨
-🔄 <i>Или новую ссылку?</i>""", reply_markup=markup, parse_mode='HTML')
+🔄 <i>Или новую ссылку?</i>''', reply_markup=markup, parse_mode='HTML')
         user_states[user_id] = ('waiting_choice', link)
     else:
         bot.reply_to(message, "❌ <b>Ошибка</b>")
@@ -135,9 +136,9 @@ def reply_menu(call):
     bot.answer_callback_query(call.id)
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
     reply_pending[call.from_user.id] = q_id
-    bot.reply_to(call.message, f"""✍️ <b>Ответ на вопрос #{q_id}</b>
+    bot.reply_to(call.message, f'''✍️ <b>Ответ на вопрос #{q_id}</b>
 
-💬 Твой ответ:""")
+💬 Твой ответ:''')
 
 def process_reply(message, q_id):
     user_id = message.from_user.id
@@ -149,23 +150,23 @@ def process_reply(message, q_id):
         result = cursor.fetchone()
         question_text = result[0] if result else "?"
         
-        full_reply = f"""📩 <b>Ответ получен!</b>
+        full_reply = f'''📩 <b>Ответ получен!</b>
 
 ❓ <i>{question_text}</i>
 
-💬 <b>{message.text}</b>"""
+💬 <b>{message.text}</b>'''
         bot.send_message(sender_id, full_reply, parse_mode='HTML')
-        bot.reply_to(message, f"""✅ <b>Ответ доставлен!</b>
+        bot.reply_to(message, f'''✅ <b>Ответ доставлен!</b>
 
-✨ Получатель увидит свой вопрос + ответ""", parse_mode='HTML')
+✨ Получатель увидит свой вопрос + ответ''', parse_mode='HTML')
         
-        reply_log = f"""📤 <b>ОТВЕТ #{q_id}</b>
+        reply_log = f'''📤 <b>ОТВЕТ #{q_id}</b>
 {user_id} → {sender_id}
 ❓ <i>{question_text}</i>
-💬 <b>{message.text}</b>"""
+💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, reply_log, parse_mode='HTML')
     else:
         bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
 
-print("🚀 ✨ Красивый бот запущен!")
+print("🚀 ✨ Красивый бот с HTML ссылками!")
 bot.polling(none_stop=True)
