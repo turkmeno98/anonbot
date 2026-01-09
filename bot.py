@@ -7,7 +7,7 @@ from collections import defaultdict
 import os
 
 # 🔧 НАСТРОЙКИ
-TOKEN = 'YOUR_BOT_TOKEN_HERE'  # Замените!
+TOKEN = '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo'  # Замените!
 ADMIN_CHAT_ID = -1003267199569
 ADMIN_ID = 1135333763  # ← ВАШ USER ID!
 
