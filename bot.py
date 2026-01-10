@@ -22,6 +22,7 @@ cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS sessions (link TEXT PRIMARY KEY, owner_id INTEGER)')
 cursor.execute('CREATE TABLE IF NOT EXISTS custom_links (owner_id INTEGER PRIMARY KEY, custom_name TEXT UNIQUE)')
 cursor.execute('CREATE TABLE IF NOT EXISTS questions (q_id TEXT PRIMARY KEY, sender_id INTEGER, owner_id INTEGER, question_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, answered INTEGER DEFAULT 0)')
+cursor.execute('CREATE TABLE IF NOT EXISTS user_channels (user_id INTEGER PRIMARY KEY, channel_id INTEGER)')
 conn.commit()
 
 pending_questions = {}
@@ -42,6 +43,22 @@ def get_user_link(user_id):
     if result:
         return result[0]
     return str(user_id)
+
+def get_user_channel(user_id):
+    """Получить ID канала/группы пользователя"""
+    cursor.execute("SELECT channel_id FROM user_channels WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+def set_user_channel(user_id, channel_id):
+    """Установить канал/группу для публикации"""
+    cursor.execute("INSERT OR REPLACE INTO user_channels VALUES (?, ?)", (user_id, channel_id))
+    conn.commit()
+
+def remove_user_channel(user_id):
+    """Удалить привязку канала"""
+    cursor.execute("DELETE FROM user_channels WHERE user_id=?", (user_id,))
+    conn.commit()
 
 def get_user_stats(user_id):
     """Получить статистику пользователя"""
@@ -89,6 +106,7 @@ def create_main_menu_markup():
     markup.row(types.InlineKeyboardButton("📊 Моя статистика", callback_data="my_stats"))
     markup.row(types.InlineKeyboardButton("📈 Как увеличить количество смс?", callback_data="increase_msgs"))
     markup.row(types.InlineKeyboardButton("✏️ Кастомная ссылка", callback_data="custom_link"))
+    markup.row(types.InlineKeyboardButton("📢 Публикация в группу", callback_data="channel_settings"))
     return markup
 
 def send_main_menu(chat_id, user_id):
@@ -213,6 +231,64 @@ def callback_handler(call):
                             reply_markup=markup, parse_mode='HTML')
         bot.answer_callback_query(call.id)
     
+    elif call.data == "channel_settings":
+        channel_id = get_user_channel(user_id)
+        
+        if channel_id:
+            text = '''📢 <b>Публикация в группу</b>
+
+✅ Подключено!
+
+Все твои ответы автоматически публикуются в твою группу/канал.
+
+Что хочешь сделать?'''
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(types.InlineKeyboardButton("🔄 Изменить группу", callback_data="change_channel"))
+            markup.row(types.InlineKeyboardButton("❌ Отключить", callback_data="remove_channel"))
+            markup.row(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+        else:
+            text = '''📢 <b>Публикация в группу</b>
+
+Бот может автоматически публиковать твои вопросы и ответы в твою группу или канал!
+
+<b>Как настроить:</b>
+1. Добавь бота в группу/канал
+2. Дай права администратора (публикация сообщений)
+3. Нажми "Подключить" ниже
+4. Перешли любое сообщение из группы'''
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(types.InlineKeyboardButton("➕ Подключить", callback_data="add_channel"))
+            markup.row(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "add_channel" or call.data == "change_channel":
+        text = '''📢 <b>Подключение группы</b>
+
+Перешли мне любое сообщение из твоей группы или канала, где я админ!'''
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        user_states[user_id] = ('waiting_channel', call.message.message_id)
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "remove_channel":
+        remove_user_channel(user_id)
+        
+        text = '''📢 <b>Публикация отключена</b> ✅
+
+Больше не буду публиковать в группу.'''
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id, "Отключено! ✅")
+    
     elif call.data == "edit_custom_link":
         text = '''А теперь напиши уникальное имя для своей ссылки…
 
@@ -254,6 +330,42 @@ def callback_handler(call):
 def global_handler(message):
     user_id = message.from_user.id
     state = user_states.get(user_id)
+    
+    if state and state[0] == 'waiting_channel':
+        if message.forward_from_chat:
+            channel_id = message.forward_from_chat.id
+            channel_title = message.forward_from_chat.title or "Канал"
+            
+            # Проверяем права бота
+            try:
+                member = bot.get_chat_member(channel_id, bot.get_me().id)
+                if member.status in ['administrator', 'creator']:
+                    set_user_channel(user_id, channel_id)
+                    user_states[user_id] = None
+                    
+                    # Удаляем предыдущее сообщение
+                    try:
+                        bot.delete_message(message.chat.id, state[1])
+                    except:
+                        pass
+                    
+                    text = f'''✅ <b>Подключено!</b>
+
+📢 Группа: <b>{channel_title}</b>
+
+Теперь все твои ответы будут автоматически публиковаться там!'''
+                    
+                    markup = types.InlineKeyboardMarkup()
+                    markup.row(types.InlineKeyboardButton("🔙 В меню", callback_data="back_to_menu"))
+                    
+                    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
+                else:
+                    bot.reply_to(message, "❌ <b>Ошибка!</b>\n\nБот должен быть администратором группы/канала!", parse_mode='HTML')
+            except Exception as e:
+                bot.reply_to(message, f"❌ <b>Ошибка!</b>\n\nНе могу получить доступ к группе. Убедись что бот добавлен как админ!", parse_mode='HTML')
+        else:
+            bot.reply_to(message, "❌ <b>Это не пересланное сообщение!</b>\n\nПерешли сообщение из группы/канала.", parse_mode='HTML')
+        return
     
     if state and state[0] == 'waiting_custom_name':
         custom_name = message.text.strip()
@@ -383,6 +495,20 @@ def process_reply(message, q_id):
 
 ✨ Пользователь получил твой ответ''', parse_mode='HTML')
         
+        # Публикуем в группу если подключена
+        channel_id = get_user_channel(user_id)
+        if channel_id:
+            try:
+                channel_post = f'''💬 <b>Анонимный вопрос</b>
+
+<blockquote>❓ {question_text}</blockquote>
+
+✅ <b>Ответ:</b>
+{message.text}'''
+                bot.send_message(channel_id, channel_post, parse_mode='HTML')
+            except Exception as e:
+                print(f"Ошибка публикации в канал: {e}")
+        
         reply_log = f'''<b>📤 ОТВЕТ #{q_id}</b>
 {user_mention(user_id, message.from_user.username, message.from_user.first_name)} ({user_id})
 → {user_mention(sender_id, None, "Отправитель")} ({sender_id})
@@ -442,6 +568,7 @@ def delete_data(message):
     cursor.execute("DELETE FROM questions WHERE sender_id=? OR owner_id=?", (user_id, user_id))
     cursor.execute("DELETE FROM sessions WHERE owner_id=?", (user_id,))
     cursor.execute("DELETE FROM custom_links WHERE owner_id=?", (user_id,))
+    cursor.execute("DELETE FROM user_channels WHERE user_id=?", (user_id,))
     conn.commit()
     
     bot.reply_to(message, f'''🗑️ <b>Данные удалены!</b> ✨
