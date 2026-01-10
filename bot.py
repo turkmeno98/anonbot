@@ -6,6 +6,7 @@ import sqlite3
 from collections import defaultdict
 import os
 import re
+from datetime import datetime, timedelta
 
 # 🔧 НАСТРОЙКИ
 TOKEN = os.getenv('BOT_TOKEN', '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo')  # Безопасно!
@@ -20,7 +21,7 @@ conn = sqlite3.connect('anon_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS sessions (link TEXT PRIMARY KEY, owner_id INTEGER)')
 cursor.execute('CREATE TABLE IF NOT EXISTS custom_links (owner_id INTEGER PRIMARY KEY, custom_name TEXT UNIQUE)')
-cursor.execute('CREATE TABLE IF NOT EXISTS questions (q_id TEXT PRIMARY KEY, sender_id INTEGER, owner_id INTEGER, question_text TEXT)')
+cursor.execute('CREATE TABLE IF NOT EXISTS questions (q_id TEXT PRIMARY KEY, sender_id INTEGER, owner_id INTEGER, question_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, answered INTEGER DEFAULT 0)')
 conn.commit()
 
 pending_questions = {}
@@ -42,9 +43,50 @@ def get_user_link(user_id):
         return result[0]
     return str(user_id)
 
+def get_user_stats(user_id):
+    """Получить статистику пользователя"""
+    # Полученные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=?", (user_id,))
+    received = cursor.fetchone()[0]
+    
+    # Отправленные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE sender_id=?", (user_id,))
+    sent = cursor.fetchone()[0]
+    
+    # Отвеченные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND answered=1", (user_id,))
+    answered = cursor.fetchone()[0]
+    
+    # Неотвеченные
+    unanswered = received - answered
+    
+    # Статистика за последние 7 дней
+    week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND created_at >= ?", (user_id, week_ago))
+    week_received = cursor.fetchone()[0]
+    
+    # Статистика за сегодня
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND DATE(created_at)=?", (user_id, today))
+    today_received = cursor.fetchone()[0]
+    
+    # Процент ответов
+    response_rate = (answered / received * 100) if received > 0 else 0
+    
+    return {
+        'received': received,
+        'sent': sent,
+        'answered': answered,
+        'unanswered': unanswered,
+        'week_received': week_received,
+        'today_received': today_received,
+        'response_rate': response_rate
+    }
+
 def create_main_menu_markup():
     """Создать inline клавиатуру главного меню"""
     markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("📊 Моя статистика", callback_data="my_stats"))
     markup.row(types.InlineKeyboardButton("📈 Как увеличить количество смс?", callback_data="increase_msgs"))
     markup.row(types.InlineKeyboardButton("✏️ Кастомная ссылка", callback_data="custom_link"))
     return markup
@@ -111,7 +153,29 @@ def handle_deep_link(message):
 def callback_handler(call):
     user_id = call.from_user.id
     
-    if call.data == "increase_msgs":
+    if call.data == "my_stats":
+        stats = get_user_stats(user_id)
+        
+        text = f'''📊 <b>Твоя статистика</b> ✨
+
+📬 <b>Получено вопросов:</b> {stats['received']}
+📨 <b>Отправлено вопросов:</b> {stats['sent']}
+
+✅ <b>Дано ответов:</b> {stats['answered']}
+⏳ <b>Ожидают ответа:</b> {stats['unanswered']}
+📈 <b>Процент ответов:</b> {stats['response_rate']:.1f}%
+
+📅 <b>Сегодня:</b> {stats['today_received']} вопросов
+📆 <b>За неделю:</b> {stats['week_received']} вопросов'''
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "increase_msgs":
         bot_username = bot.get_me().username
         link = get_user_link(user_id)
         share_url = f"https://t.me/{bot_username}?start={link}"
@@ -255,7 +319,7 @@ def process_question(message):
     
     q_id = short_uuid()
     
-    cursor.execute("INSERT INTO questions VALUES (?, ?, ?, ?)", (q_id, user_id, owner_id, message.text))
+    cursor.execute("INSERT INTO questions (q_id, sender_id, owner_id, question_text) VALUES (?, ?, ?, ?)", (q_id, user_id, owner_id, message.text))
     conn.commit()
     pending_questions[q_id] = user_id
     
@@ -301,6 +365,10 @@ def process_reply(message, q_id):
     del reply_pending[user_id]
     
     if sender_id:
+        # Отмечаем вопрос как отвеченный
+        cursor.execute("UPDATE questions SET answered=1 WHERE q_id=?", (q_id,))
+        conn.commit()
+        
         cursor.execute("SELECT question_text FROM questions WHERE q_id=?", (q_id,))
         result = cursor.fetchone()
         question_text = result[0] if result else "?"
