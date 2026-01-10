@@ -5,6 +5,7 @@ import secrets
 import sqlite3
 from collections import defaultdict
 import os
+import re
 
 # 🔧 НАСТРОЙКИ
 TOKEN = os.getenv('BOT_TOKEN', '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo')  # Безопасно!
@@ -18,6 +19,7 @@ reply_pending = {}
 conn = sqlite3.connect('anon_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS sessions (link TEXT PRIMARY KEY, owner_id INTEGER)')
+cursor.execute('CREATE TABLE IF NOT EXISTS custom_links (owner_id INTEGER PRIMARY KEY, custom_name TEXT UNIQUE)')
 cursor.execute('CREATE TABLE IF NOT EXISTS questions (q_id TEXT PRIMARY KEY, sender_id INTEGER, owner_id INTEGER, question_text TEXT)')
 conn.commit()
 
@@ -32,6 +34,37 @@ def user_mention(user_id, username, first_name):
         return f'<a href="tg://user?id={user_id}">@{username}</a>'
     return f'<a href="tg://user?id={user_id}">{first_name or "🦸 Аноним"}</a>'
 
+def get_user_link(user_id):
+    """Получить ссылку пользователя (кастомную или ID)"""
+    cursor.execute("SELECT custom_name FROM custom_links WHERE owner_id=?", (user_id,))
+    result = cursor.fetchone()
+    if result:
+        return result[0]
+    return str(user_id)
+
+def create_main_menu_markup():
+    """Создать inline клавиатуру главного меню"""
+    markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("📈 Как увеличить количество смс?", callback_data="increase_msgs"))
+    markup.row(types.InlineKeyboardButton("✏️ Кастомная ссылка", callback_data="custom_link"))
+    return markup
+
+def send_main_menu(chat_id, user_id):
+    """Отправить главное меню со ссылкой пользователя"""
+    bot_username = bot.get_me().username
+    link = get_user_link(user_id)
+    share_url = f"https://t.me/{bot_username}?start={link}"
+    
+    message_text = f'''Вот твоя личная ссылка:
+
+{share_url}
+
+Опубликуй её и получай анонимные
+сообщения'''
+    
+    markup = create_main_menu_markup()
+    bot.send_message(chat_id, message_text, reply_markup=markup, parse_mode='HTML')
+
 @bot.message_handler(commands=['start'])
 def start(message):
     parts = message.text.split()
@@ -41,36 +74,168 @@ def start(message):
         handle_deep_link(message)
         return
     
-    link_id = short_uuid()
+    # Создаем сессию с ID пользователя
+    link_id = str(user_id)
     cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (link_id, user_id))
     conn.commit()
-    bot_username = bot.get_me().username
-    share_url = f"https://t.me/{bot_username}?start={link_id}"
     
-    clickable = f'<a href="{share_url}">🔗 Твоя секретная ссылка</a>'
-    bot.reply_to(message, f'''🎭 <b>Анонимные вопросы!</b> ✨
-
-{clickable}
-
-✨ Поделись — получишь интересные сообщения от друзей!
-<i>Сообщения полностью анонимные</i>''', parse_mode='HTML')
+    # Отправляем главное меню БЕЗ reply_to
+    send_main_menu(user_id, user_id)
 
 def handle_deep_link(message):
     user_id = message.from_user.id
     link = message.text.split(maxsplit=1)[1]
-    cursor.execute("SELECT owner_id FROM sessions WHERE link=?", (link,))
-    result = cursor.fetchone()
     
-    if result and result[0] != user_id:
-        user_states[user_id] = ('waiting_question', link)
+    # Проверяем, является ли ссылка кастомной
+    cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=?", (link,))
+    result = cursor.fetchone()
+    if result:
+        owner_id = result[0]
+    else:
+        # Проверяем обычную ссылку
+        cursor.execute("SELECT owner_id FROM sessions WHERE link=?", (link,))
+        result = cursor.fetchone()
+        if result:
+            owner_id = result[0]
+        else:
+            bot.reply_to(message, "🚫 <b>Ошибка ссылки</b>\nПопробуй новую /start", parse_mode='HTML')
+            return
+    
+    if owner_id != user_id:
+        user_states[user_id] = ('waiting_question', owner_id)
         bot.reply_to(message, "💌 <b>Напиши вопрос анонимно</b>\n\n<i>Будет доставлен секретно! 🕵️</i>", parse_mode='HTML')
     else:
-        bot.reply_to(message, "🚫 <b>Ошибка ссылки</b>\nПопробуй новую /start")
+        bot.reply_to(message, "🚫 <b>Ошибка ссылки</b>\nПопробуй новую /start", parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.from_user.id
+    
+    if call.data == "increase_msgs":
+        bot_username = bot.get_me().username
+        link = get_user_link(user_id)
+        share_url = f"https://t.me/{bot_username}?start={link}"
+        
+        text = f'''📈 Поделись с друзьями!
+— Отправь в личке или ТГК
+— Добавь ссылку в профиль
+— Выложи в историю
+
+Твоя ссылка: {share_url}'''
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("✅ Понятно", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "custom_link":
+        bot_username = bot.get_me().username
+        link = get_user_link(user_id)
+        share_url = f"https://t.me/{bot_username}?start={link}"
+        
+        text = f'''Здесь ты можешь дать имя своей ссылке вместо ID {user_id}
+
+На данный момент твоя ссылка выглядит так: {share_url}
+
+Чтобы изменить имя - нажми «Изменить»'''
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("✏️ Изменить", callback_data="edit_custom_link"))
+        markup.row(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "edit_custom_link":
+        text = '''А теперь напиши уникальное имя для своей ссылки…
+
+Только английские буквы и цифры!
+Пример: naste4ka'''
+        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+        user_states[user_id] = ('waiting_custom_name', call.message.message_id)
+        bot.answer_callback_query(call.id)
+    
+    elif call.data == "back_to_menu":
+        bot_username = bot.get_me().username
+        link = get_user_link(user_id)
+        share_url = f"https://t.me/{bot_username}?start={link}"
+        
+        message_text = f'''Вот твоя личная ссылка:
+
+{share_url}
+
+Опубликуй её и получай анонимные
+сообщения'''
+        
+        markup = create_main_menu_markup()
+        bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id, 
+                            reply_markup=markup, parse_mode='HTML')
+        bot.answer_callback_query(call.id)
+    
+    elif call.data.startswith('reply_'):
+        cb_data = call.data[6:]
+        q_id = base64.urlsafe_b64decode(cb_data.encode()).decode()[:8]
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
+        reply_pending[call.from_user.id] = q_id
+        bot.reply_to(call.message, f'''✍️ <b>Ответ на вопрос #{q_id}</b>
+
+💬 Твой ответ:''', parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: True)
 def global_handler(message):
     user_id = message.from_user.id
-    state = user_states[user_id]
+    state = user_states.get(user_id)
+    
+    if state and state[0] == 'waiting_custom_name':
+        custom_name = message.text.strip()
+        
+        # Проверяем формат (только буквы и цифры)
+        if not re.match(r'^[a-zA-Z0-9]+$', custom_name):
+            bot.reply_to(message, "❌ <b>Ошибка!</b>\n\nИспользуй только английские буквы и цифры без пробелов!", parse_mode='HTML')
+            return
+        
+        # Проверяем уникальность
+        cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=?", (custom_name,))
+        existing = cursor.fetchone()
+        
+        if existing and existing[0] != user_id:
+            bot.reply_to(message, "❌ <b>Имя занято!</b>\n\nПопробуй другое имя.", parse_mode='HTML')
+            return
+        
+        # Сохраняем кастомное имя
+        cursor.execute("INSERT OR REPLACE INTO custom_links VALUES (?, ?)", (user_id, custom_name))
+        cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (custom_name, user_id))
+        conn.commit()
+        
+        # Очищаем состояние
+        user_states[user_id] = None
+        
+        # Отправляем обновленное меню
+        bot_username = bot.get_me().username
+        share_url = f"https://t.me/{bot_username}?start={custom_name}"
+        
+        message_text = f'''Вот твоя личная ссылка:
+
+{share_url}
+
+Опубликуй её и получай анонимные
+сообщения'''
+        
+        markup = create_main_menu_markup()
+        
+        # Удаляем предыдущее сообщение
+        try:
+            bot.delete_message(message.chat.id, state[1])
+        except:
+            pass
+        
+        bot.send_message(message.chat.id, message_text, reply_markup=markup, parse_mode='HTML')
+        return
     
     if state and state[0] == 'waiting_question':
         process_question(message)
@@ -86,65 +251,49 @@ def global_handler(message):
 
 def process_question(message):
     user_id = message.from_user.id
-    link = user_states[user_id][1]
-    cursor.execute("SELECT owner_id FROM sessions WHERE link=?", (link,))
-    result = cursor.fetchone()
+    owner_id = user_states[user_id][1]
     
-    if result:
-        owner_id = result[0]
-        q_id = short_uuid()
-        
-        cursor.execute("INSERT INTO questions VALUES (?, ?, ?, ?)", (q_id, user_id, owner_id, message.text))
-        conn.commit()
-        pending_questions[q_id] = user_id
-        
-        cb_data = base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{cb_data}"))
-        bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b> ✨
+    q_id = short_uuid()
+    
+    cursor.execute("INSERT INTO questions VALUES (?, ?, ?, ?)", (q_id, user_id, owner_id, message.text))
+    conn.commit()
+    pending_questions[q_id] = user_id
+    
+    cb_data = base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{cb_data}"))
+    bot.send_message(owner_id, f'''🎁 <b>Новый анонимный вопрос!</b> ✨
 
 🆔 <code>{q_id}</code>
 
 💭 <b>{message.text}</b>''', reply_markup=markup, parse_mode='HTML')
-        
-        sender_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
-        admin_log = f'''🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
+    
+    sender_mention = user_mention(user_id, message.from_user.username, message.from_user.first_name)
+    admin_log = f'''🕵️‍♂️ <b>ВОПРОС #{q_id}</b>
 
 {sender_mention} ({user_id}) → {owner_id}
 
 💬 <b>{message.text}</b>'''
-        bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
-        
-        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add("➕ Ещё один вопрос ✨", "🔄 Новая ссылка")
-        bot.reply_to(message, f'''✅ <b>Вопрос доставлен! 🚀</b>
+    bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
+    
+    markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add("➕ Ещё один вопрос ✨", "🔄 Новая ссылка")
+    bot.reply_to(message, f'''✅ <b>Вопрос доставлен! 🚀</b>
 
 ➕ <i>Ещё один вопрос?</i> ✨
 🔄 <i>Или новую ссылку?</i>''', reply_markup=markup, parse_mode='HTML')
-        user_states[user_id] = ('waiting_choice', link)
-    else:
-        bot.reply_to(message, "❌ <b>Ошибка</b>")
+    user_states[user_id] = ('waiting_choice', owner_id)
 
 def choice_handler(message):
     user_id = message.from_user.id
     
     if "Ещё" in message.text:
-        user_states[user_id] = ('waiting_question', user_states[user_id][1])
+        owner_id = user_states[user_id][1]
+        user_states[user_id] = ('waiting_question', owner_id)
         bot.reply_to(message, "💭 <b>Напиши следующий вопрос!</b>", parse_mode='HTML')
     else:
         user_states[user_id] = None
         bot.reply_to(message, "🔄 <b>Получи новую ссылку:</b>\n/start ✨", parse_mode='HTML')
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
-def reply_menu(call):
-    cb_data = call.data[6:]
-    q_id = base64.urlsafe_b64decode(cb_data.encode()).decode()[:8]
-    bot.answer_callback_query(call.id)
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
-    reply_pending[call.from_user.id] = q_id
-    bot.reply_to(call.message, f'''✍️ <b>Ответ на вопрос #{q_id}</b>
-
-💬 Твой ответ:''')
 
 def process_reply(message, q_id):
     user_id = message.from_user.id
@@ -174,9 +323,9 @@ def process_reply(message, q_id):
 💬 <b>{message.text}</b>'''
         bot.send_message(ADMIN_CHAT_ID, reply_log, parse_mode='HTML')
     else:
-        bot.reply_to(message, "❌ <b>Вопрос не найден</b>")
+        bot.reply_to(message, "❌ <b>Вопрос не найден</b>", parse_mode='HTML')
 
-# 🔥 НОВЫЕ КОМАНДЫ
+# 🔥 КОМАНДЫ
 @bot.message_handler(commands=['privacy'])
 def privacy_policy(message):
     bot.reply_to(message, """
@@ -204,7 +353,7 @@ def privacy_policy(message):
 def stats_command(message):
     user_id = message.from_user.id
     if user_id != ADMIN_ID:
-        bot.reply_to(message, "🚫 <b>Только для админа!</b>")
+        bot.reply_to(message, "🚫 <b>Только для админа!</b>", parse_mode='HTML')
         return
     
     cursor.execute("SELECT COUNT(*) FROM questions")
@@ -224,6 +373,7 @@ def delete_data(message):
     
     cursor.execute("DELETE FROM questions WHERE sender_id=? OR owner_id=?", (user_id, user_id))
     cursor.execute("DELETE FROM sessions WHERE owner_id=?", (user_id,))
+    cursor.execute("DELETE FROM custom_links WHERE owner_id=?", (user_id,))
     conn.commit()
     
     bot.reply_to(message, f'''🗑️ <b>Данные удалены!</b> ✨
