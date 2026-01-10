@@ -2,81 +2,28 @@ import telebot
 from telebot import types
 import base64
 import secrets
-import pymysql
+import sqlite3
 from collections import defaultdict
 import os
 import re
 from datetime import datetime, timedelta
 
 # 🔧 НАСТРОЙКИ
-TOKEN = os.getenv('BOT_TOKEN', '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo')
-ADMIN_CHAT_ID = -1003267199569
-ADMIN_ID = 1135333763
-
-# 💾 Подключение к MySQL на Beget
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'm995401w_uchet'),
-    'password': os.getenv('DB_PASSWORD', 'i5DeqgG&Z2rS'),
-    'database': os.getenv('DB_NAME', 'm995401w_uchet'),
-    'charset': 'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor,
-    'autocommit': True
-}
-
-def get_db_connection():
-    """Получить подключение к базе данных"""
-    return pymysql.connect(**DB_CONFIG)
-
-def init_database():
-    """Инициализация таблиц в базе данных"""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            # Таблица сессий
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    link VARCHAR(255) PRIMARY KEY,
-                    owner_id BIGINT NOT NULL,
-                    INDEX idx_owner (owner_id)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Таблица кастомных ссылок
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS custom_links (
-                    owner_id BIGINT PRIMARY KEY,
-                    custom_name VARCHAR(255) UNIQUE NOT NULL,
-                    INDEX idx_custom_name (custom_name)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Таблица вопросов
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS questions (
-                    q_id VARCHAR(20) PRIMARY KEY,
-                    sender_id BIGINT NOT NULL,
-                    owner_id BIGINT NOT NULL,
-                    question_text TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    answered TINYINT(1) DEFAULT 0,
-                    INDEX idx_sender (sender_id),
-                    INDEX idx_owner (owner_id),
-                    INDEX idx_created (created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-        print("✅ База данных инициализирована!")
-    finally:
-        conn.close()
-
-# Инициализируем БД при запуске
-init_database()
+TOKEN = os.getenv('BOT_TOKEN', '8430859086:AAEsdPIGXI-xG-6COFj48AUnU69yseZOnZo')  # Безопасно!
+ADMIN_CHAT_ID = -1003267199569  # Ваша группа
+ADMIN_ID = 1135333763  # ← ЗАМЕНИТЕ НА ВАШ USER ID!
 
 bot = telebot.TeleBot(TOKEN)
 user_states = defaultdict(lambda: None)
 reply_pending = {}
+
+conn = sqlite3.connect('anon_bot.db', check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('CREATE TABLE IF NOT EXISTS sessions (link TEXT PRIMARY KEY, owner_id INTEGER)')
+cursor.execute('CREATE TABLE IF NOT EXISTS custom_links (owner_id INTEGER PRIMARY KEY, custom_name TEXT UNIQUE)')
+cursor.execute('CREATE TABLE IF NOT EXISTS questions (q_id TEXT PRIMARY KEY, sender_id INTEGER, owner_id INTEGER, question_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, answered INTEGER DEFAULT 0)')
+conn.commit()
+
 pending_questions = {}
 
 def short_uuid():
@@ -90,65 +37,51 @@ def user_mention(user_id, username, first_name):
 
 def get_user_link(user_id):
     """Получить ссылку пользователя (кастомную или ID)"""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT custom_name FROM custom_links WHERE owner_id=%s", (user_id,))
-            result = cursor.fetchone()
-            if result:
-                return result['custom_name']
-    finally:
-        conn.close()
+    cursor.execute("SELECT custom_name FROM custom_links WHERE owner_id=?", (user_id,))
+    result = cursor.fetchone()
+    if result:
+        return result[0]
     return str(user_id)
 
 def get_user_stats(user_id):
     """Получить статистику пользователя"""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            # Полученные вопросы
-            cursor.execute("SELECT COUNT(*) as cnt FROM questions WHERE owner_id=%s", (user_id,))
-            received = cursor.fetchone()['cnt']
-            
-            # Отправленные вопросы
-            cursor.execute("SELECT COUNT(*) as cnt FROM questions WHERE sender_id=%s", (user_id,))
-            sent = cursor.fetchone()['cnt']
-            
-            # Отвеченные вопросы
-            cursor.execute("SELECT COUNT(*) as cnt FROM questions WHERE owner_id=%s AND answered=1", (user_id,))
-            answered = cursor.fetchone()['cnt']
-            
-            # Неотвеченные
-            unanswered = received - answered
-            
-            # Статистика за последние 7 дней
-            cursor.execute("""
-                SELECT COUNT(*) as cnt FROM questions 
-                WHERE owner_id=%s AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-            """, (user_id,))
-            week_received = cursor.fetchone()['cnt']
-            
-            # Статистика за сегодня
-            cursor.execute("""
-                SELECT COUNT(*) as cnt FROM questions 
-                WHERE owner_id=%s AND DATE(created_at)=CURDATE()
-            """, (user_id,))
-            today_received = cursor.fetchone()['cnt']
-            
-            # Процент ответов
-            response_rate = (answered / received * 100) if received > 0 else 0
-            
-            return {
-                'received': received,
-                'sent': sent,
-                'answered': answered,
-                'unanswered': unanswered,
-                'week_received': week_received,
-                'today_received': today_received,
-                'response_rate': response_rate
-            }
-    finally:
-        conn.close()
+    # Полученные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=?", (user_id,))
+    received = cursor.fetchone()[0]
+    
+    # Отправленные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE sender_id=?", (user_id,))
+    sent = cursor.fetchone()[0]
+    
+    # Отвеченные вопросы
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND answered=1", (user_id,))
+    answered = cursor.fetchone()[0]
+    
+    # Неотвеченные
+    unanswered = received - answered
+    
+    # Статистика за последние 7 дней
+    week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND created_at >= ?", (user_id, week_ago))
+    week_received = cursor.fetchone()[0]
+    
+    # Статистика за сегодня
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute("SELECT COUNT(*) FROM questions WHERE owner_id=? AND DATE(created_at)=?", (user_id, today))
+    today_received = cursor.fetchone()[0]
+    
+    # Процент ответов
+    response_rate = (answered / received * 100) if received > 0 else 0
+    
+    return {
+        'received': received,
+        'sent': sent,
+        'answered': answered,
+        'unanswered': unanswered,
+        'week_received': week_received,
+        'today_received': today_received,
+        'response_rate': response_rate
+    }
 
 def create_main_menu_markup():
     """Создать inline клавиатуру главного меню"""
@@ -185,15 +118,8 @@ def start(message):
     
     # Создаем сессию с ID пользователя
     link_id = str(user_id)
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO sessions (link, owner_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE owner_id=%s",
-                (link_id, user_id, user_id)
-            )
-    finally:
-        conn.close()
+    cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (link_id, user_id))
+    conn.commit()
     
     # Отправляем главное меню БЕЗ reply_to
     send_main_menu(user_id, user_id)
@@ -202,25 +128,20 @@ def handle_deep_link(message):
     user_id = message.from_user.id
     link = message.text.split(maxsplit=1)[1]
     
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            # Проверяем, является ли ссылка кастомной
-            cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=%s", (link,))
-            result = cursor.fetchone()
-            if result:
-                owner_id = result['owner_id']
-            else:
-                # Проверяем обычную ссылку
-                cursor.execute("SELECT owner_id FROM sessions WHERE link=%s", (link,))
-                result = cursor.fetchone()
-                if result:
-                    owner_id = result['owner_id']
-                else:
-                    bot.reply_to(message, "🚫 <b>Ошибка ссылки</b>\nПопробуй новую /start", parse_mode='HTML')
-                    return
-    finally:
-        conn.close()
+    # Проверяем, является ли ссылка кастомной
+    cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=?", (link,))
+    result = cursor.fetchone()
+    if result:
+        owner_id = result[0]
+    else:
+        # Проверяем обычную ссылку
+        cursor.execute("SELECT owner_id FROM sessions WHERE link=?", (link,))
+        result = cursor.fetchone()
+        if result:
+            owner_id = result[0]
+        else:
+            bot.reply_to(message, "🚫 <b>Ошибка ссылки</b>\nПопробуй новую /start", parse_mode='HTML')
+            return
     
     if owner_id != user_id:
         user_states[user_id] = ('waiting_question', owner_id)
@@ -342,28 +263,18 @@ def global_handler(message):
             bot.reply_to(message, "❌ <b>Ошибка!</b>\n\nИспользуй только английские буквы и цифры без пробелов!", parse_mode='HTML')
             return
         
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cursor:
-                # Проверяем уникальность
-                cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=%s", (custom_name,))
-                existing = cursor.fetchone()
-                
-                if existing and existing['owner_id'] != user_id:
-                    bot.reply_to(message, "❌ <b>Имя занято!</b>\n\nПопробуй другое имя.", parse_mode='HTML')
-                    return
-                
-                # Сохраняем кастомное имя
-                cursor.execute(
-                    "INSERT INTO custom_links (owner_id, custom_name) VALUES (%s, %s) ON DUPLICATE KEY UPDATE custom_name=%s",
-                    (user_id, custom_name, custom_name)
-                )
-                cursor.execute(
-                    "INSERT INTO sessions (link, owner_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE owner_id=%s",
-                    (custom_name, user_id, user_id)
-                )
-        finally:
-            conn.close()
+        # Проверяем уникальность
+        cursor.execute("SELECT owner_id FROM custom_links WHERE custom_name=?", (custom_name,))
+        existing = cursor.fetchone()
+        
+        if existing and existing[0] != user_id:
+            bot.reply_to(message, "❌ <b>Имя занято!</b>\n\nПопробуй другое имя.", parse_mode='HTML')
+            return
+        
+        # Сохраняем кастомное имя
+        cursor.execute("INSERT OR REPLACE INTO custom_links VALUES (?, ?)", (user_id, custom_name))
+        cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (custom_name, user_id))
+        conn.commit()
         
         # Очищаем состояние
         user_states[user_id] = None
@@ -408,16 +319,8 @@ def process_question(message):
     
     q_id = short_uuid()
     
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO questions (q_id, sender_id, owner_id, question_text) VALUES (%s, %s, %s, %s)",
-                (q_id, user_id, owner_id, message.text)
-            )
-    finally:
-        conn.close()
-    
+    cursor.execute("INSERT INTO questions (q_id, sender_id, owner_id, question_text) VALUES (?, ?, ?, ?)", (q_id, user_id, owner_id, message.text))
+    conn.commit()
     pending_questions[q_id] = user_id
     
     cb_data = base64.urlsafe_b64encode(q_id.encode()).decode()[:32]
@@ -462,17 +365,13 @@ def process_reply(message, q_id):
     del reply_pending[user_id]
     
     if sender_id:
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cursor:
-                # Отмечаем вопрос как отвеченный
-                cursor.execute("UPDATE questions SET answered=1 WHERE q_id=%s", (q_id,))
-                
-                cursor.execute("SELECT question_text FROM questions WHERE q_id=%s", (q_id,))
-                result = cursor.fetchone()
-                question_text = result['question_text'] if result else "?"
-        finally:
-            conn.close()
+        # Отмечаем вопрос как отвеченный
+        cursor.execute("UPDATE questions SET answered=1 WHERE q_id=?", (q_id,))
+        conn.commit()
+        
+        cursor.execute("SELECT question_text FROM questions WHERE q_id=?", (q_id,))
+        result = cursor.fetchone()
+        question_text = result[0] if result else "?"
         
         full_reply = f'''📩 <b>Ответ получен!</b>
 
@@ -525,15 +424,10 @@ def stats_command(message):
         bot.reply_to(message, "🚫 <b>Только для админа!</b>", parse_mode='HTML')
         return
     
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) as cnt FROM questions")
-            total = cursor.fetchone()['cnt']
-            cursor.execute("SELECT COUNT(DISTINCT sender_id) as cnt FROM questions")
-            users = cursor.fetchone()['cnt']
-    finally:
-        conn.close()
+    cursor.execute("SELECT COUNT(*) FROM questions")
+    total = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT sender_id) FROM questions")
+    users = cursor.fetchone()[0]
     
     bot.reply_to(message, f'''📊 <b>Статистика ✨</b>
 
@@ -545,14 +439,10 @@ def stats_command(message):
 def delete_data(message):
     user_id = message.from_user.id
     
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM questions WHERE sender_id=%s OR owner_id=%s", (user_id, user_id))
-            cursor.execute("DELETE FROM sessions WHERE owner_id=%s", (user_id,))
-            cursor.execute("DELETE FROM custom_links WHERE owner_id=%s", (user_id,))
-    finally:
-        conn.close()
+    cursor.execute("DELETE FROM questions WHERE sender_id=? OR owner_id=?", (user_id, user_id))
+    cursor.execute("DELETE FROM sessions WHERE owner_id=?", (user_id,))
+    cursor.execute("DELETE FROM custom_links WHERE owner_id=?", (user_id,))
+    conn.commit()
     
     bot.reply_to(message, f'''🗑️ <b>Данные удалены!</b> ✨
 
@@ -561,5 +451,5 @@ def delete_data(message):
     admin_log = f"🗑️ <b>Юзер удалил данные:</b>\n<a href='tg://user?id={user_id}'>ID {user_id}</a>"
     bot.send_message(ADMIN_CHAT_ID, admin_log, parse_mode='HTML')
 
-print("🚀 ✨ Анонимный бот PRO готов на MySQL!")
+print("🚀 ✨ Анонимный бот PRO готов!")
 bot.polling(none_stop=True)
